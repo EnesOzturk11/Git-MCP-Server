@@ -2,6 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { execSync } from 'child_process';
 import {z} from "zod";
+import { is, ur } from "zod/locales";
+
+
 
 // Create Server instance
 const server = new McpServer({
@@ -12,7 +15,7 @@ const server = new McpServer({
 // Helper functions
 function runGitCommand (command : string, path: string = "."): string {
     try {
-        return execSync(`git -C ${path} ${command}`, {encoding: "utf-8"}).trim();
+        return execSync(`git -C "${path}" ${command}`, {encoding: "utf-8"}).trim();
     } catch(error) {
         console.error(`Git Error: ${error}`);
         return `Error: Command not runned ${command}`;
@@ -33,9 +36,26 @@ interface BranchInfot {
     isCurrent: boolean
 }
 
+// Github issue interface
+interface GithubIssue {
+    id: number,
+    number: number,
+    title: string,
+    body: string,
+    state: string,
+    html_url: string,
+    labels_url: string,
+    comments_url: string,
+    events_url: string,
+    user: any,
+    assignee: any,
+    assignees: any,
+    pull_request?: any
+}
+
 // Format the commit
 function formatCommit(commit: CommitInfo): string {
-    return `{ID: ${commit.hash}\nAuthor: ${commit.author}\nDate: ${commit.date}\nMessage: ${commit.message}},`;
+    return `{ID: ${commit.hash}\nAuthor: ${commit.author}\nDate: ${commit.date}\nMessage: ${commit.message}}\n`;
 }
 
 // Tool that summarizes the all changes in the cirectory
@@ -57,7 +77,7 @@ server.registerTool(
             }]
         }
     }
-)
+);
 
 // Tool that reads recent commits about the project
 server.registerTool(
@@ -94,4 +114,114 @@ server.registerTool(
             }]
         }
     }
-)
+);
+
+// Tool that demonstrade all changes in files line by line
+server.registerTool(
+    "get-git-diff",
+    {
+        title: "Get Git Diff",
+        description: "Get all difference in files and show the differences line by line. It can focus on a specific file according to willingness",
+        inputSchema: z.object({
+            repoPath: z.string().describe("GitHub repository path"),
+            targetFile: z.string().optional().describe("Show difference only this file"),
+            cached: z.boolean().optional().default(false).describe("Show difference that are taken to stage")
+        })
+    },
+    async ({repoPath, targetFile, cached}) => {
+        let command = "diff";
+
+        if (cached) {
+            command += " --cached";
+        }
+
+        if (targetFile) {
+            command += ` ${targetFile}`;
+        }
+
+        const diff = runGitCommand(command, repoPath);
+
+        return {
+            content: [{
+                type: "text" as const,
+                text: diff || "There is no change in the related file/s"
+            }]
+        }
+    }
+);
+
+// Tool that get all issues a given repo from the github
+server.registerTool(
+    "fetch_all_issues",
+    {
+        title: "Get All Issues",
+        description: "Get all issues from the specified remote repo and list them",
+        inputSchema: z.object({
+            repoName: z.string().describe("Exact repo name for the url parameter. Ask the user if it is not provided."),
+            repoOwner: z.string().describe("Exact repository owner for the url paramter that indicates what is the owber of the repo. Ask the user if it is not provided.")
+        })
+    },
+    async ({repoName, repoOwner}) => {
+        const token = process.env.GITHUB_TOKEN;
+        const url = `https://api.github.com/repos/${repoOwner}/${repoName}/issues?state=all`;
+
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": `Bearer ${token}`,
+                    "X-GitHub-Api-Version": "2022-11-28"
+                }
+            });
+
+            if (!response.ok) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Github API error is occured: ${response.status} ${response.statusText}`
+                    }]
+                }
+            }
+
+            const data: any[] = await response.json();
+            const issue_list : GithubIssue[] = data.filter(issue => !issue.pull_request)
+            .map(issue => ({
+                id: issue.id,
+                number: issue.number,
+                title: issue.title,
+                body: issue.body,
+                state: issue.state,
+                html_url: issue.html_url,
+                labels_url: issue.labels_url,
+                comments_url: issue.comments_url,
+                events_url: issue.events_url,
+                user: issue.user,
+                assignee: issue.assignee,
+                assignees: issue.assignees,
+                pull_request: issue.pull_request
+            }));
+
+            return {
+                content: [{
+                    type: "text",
+                    text: JSON.stringify(issue_list, null, 2)
+                }]
+            };
+        }
+
+        catch (error : any) {
+            console.error("Fetch Error");
+            return {
+                content: [{
+                    type: "text",
+                    text: `Unexpected Error ${error}`
+                }],
+                isError: true
+            };
+        }
+        
+    }
+);
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
