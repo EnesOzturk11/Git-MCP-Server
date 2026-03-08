@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { execSync } from 'child_process';
+import { title } from "process";
 import {z} from "zod";
-import { is, ur } from "zod/locales";
+import { da, is, ur } from "zod/locales";
 
 
 
@@ -220,6 +221,82 @@ server.registerTool(
             };
         }
         
+    }
+);
+
+// Tool that get all comments about a given issue based on its comment url
+server.registerTool(
+    "get_issue_comments",
+    {
+        title: "Get All Comments of the Given Issue",
+        description: "Retrieves the all comments of the given issue based on its comment_url datafield which is given in the parameter of the function",
+        inputSchema: z.object({
+            repoName: z.string().describe("Exact repo name for the url parameter. Ask the user if it is not provided."),
+            repoOwner: z.string().describe("Exact repository owner for the url paramter that indicates what is the owber of the repo. Ask the user if it is not provided."),
+            issue_number: z.number().describe("The specific number of the issue to fetch comments for.")
+        })
+    },
+
+    async ({repoName, repoOwner, issue_number}) => {
+        const token = process.env.GITHUB_TOKEN;
+        const url = `https://api.github.com/repos/${repoOwner}/${repoName}/issues/${issue_number}/comments`;
+
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": `Bearer ${token}`,
+                    "X-GitHub-Api-Version": "2022-11-28"
+                }
+            });
+
+            if (!response.ok) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Github API error is occured: ${response.status} ${response.statusText}`
+                    }]
+                }
+            }
+
+            const data: any[] = await response.json();
+
+            if (data.length === 0) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: "There is no comment for the issue"
+                    }]
+                };
+            }
+
+            const comments_list = data.map(comment => ({
+                id: comment.id,
+                node_id: comment.node_id,
+                body: comment.body,
+                user: comment.user,
+                created_at: comment.created_at,
+                updated_at: comment.updated_at
+            }));
+
+            return {
+                content: [{
+                    type: "text",
+                    text: JSON.stringify(comments_list, null, 2)
+                }]
+            };
+        }
+
+        catch (error) {
+            console.error("Fetch Error");
+            return {
+                content: [{
+                    type: "text",
+                    text: `Unexpected Error ${error}`
+                }],
+                isError: true
+            };
+        }
     }
 );
 
